@@ -1,8 +1,7 @@
 "use client"
 
 import type React from "react"
-
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -25,11 +24,21 @@ export default function RAGPipeline() {
   const [query, setQuery] = useState("")
   const [isQuerying, setIsQuerying] = useState(false)
   const [embeddingDimension, setEmbeddingDimension] = useState(768)
+  const [embeddingProvider, setEmbeddingProvider] = useState<"surus" | "openai">("surus")
   const [costMetrics, setCostMetrics] = useState<{
     totalVectors: number
     storageSize: string
     monthlyCost: string
   } | null>(null)
+
+  // Reset dimension when provider changes
+  useEffect(() => {
+    if (embeddingProvider === "openai") {
+      setEmbeddingDimension(1536)
+    } else {
+      setEmbeddingDimension(768)
+    }
+  }, [embeddingProvider])
 
   const addDocument = async () => {
     if (!newDocument.trim()) return
@@ -39,7 +48,11 @@ export default function RAGPipeline() {
       const response = await fetch("/api/documents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: newDocument, dimension: embeddingDimension }),
+        body: JSON.stringify({
+          content: newDocument,
+          dimension: embeddingDimension,
+          provider: embeddingProvider,
+        }),
       })
 
       if (response.ok) {
@@ -122,6 +135,20 @@ export default function RAGPipeline() {
               />
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
+                  <label htmlFor="provider" className="text-sm font-medium">
+                    Embedding Provider:
+                  </label>
+                  <select
+                    id="provider"
+                    value={embeddingProvider}
+                    onChange={(e) => setEmbeddingProvider(e.target.value as "surus" | "openai")}
+                    className="px-3 py-1 border rounded-md text-sm"
+                  >
+                    <option value="surus">Surus AI (Matryoshka)</option>
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
                   <label htmlFor="dimension" className="text-sm font-medium">
                     Embedding Dimension:
                   </label>
@@ -130,11 +157,18 @@ export default function RAGPipeline() {
                     value={embeddingDimension}
                     onChange={(e) => setEmbeddingDimension(Number(e.target.value))}
                     className="px-3 py-1 border rounded-md text-sm"
+                    disabled={embeddingProvider === "openai"}
                   >
-                    <option value={768}>768 (Standard)</option>
-                    <option value={512}>512 (Balanced)</option>
-                    <option value={256}>256 (Efficient)</option>
-                    <option value={128}>128 (Ultra-compact)</option>
+                    {embeddingProvider === "surus" ? (
+                      <>
+                        <option value={768}>768 (Standard)</option>
+                        <option value={512}>512 (Balanced)</option>
+                        <option value={256}>256 (Efficient)</option>
+                        <option value={128}>128 (Ultra-compact)</option>
+                      </>
+                    ) : (
+                      <option value={1536}>1536 (OpenAI Standard)</option>
+                    )}
                   </select>
                 </div>
                 {costMetrics && (

@@ -9,11 +9,11 @@ interface CostComparisonProps {
 
 export function CostComparison({ vectorCount }: CostComparisonProps) {
   const dimensions = [
-    { size: 1536, label: "OpenAI ada-002", color: "destructive" },
-    { size: 768, label: "Surus Standard", color: "default" },
-    { size: 512, label: "Surus Balanced", color: "secondary" },
-    { size: 256, label: "Surus Efficient", color: "outline" },
-    { size: 128, label: "Surus Ultra-compact", color: "outline" },
+    { size: 1536, label: "OpenAI text-embedding-3-large", color: "destructive", provider: "openai" },
+    { size: 768, label: "Surus Standard", color: "default", provider: "surus" },
+    { size: 512, label: "Surus Balanced", color: "secondary", provider: "surus" },
+    { size: 256, label: "Surus Efficient", color: "outline", provider: "surus" },
+    { size: 128, label: "Surus Ultra-compact", color: "outline", provider: "surus" },
   ]
 
   const calculateCost = (dimension: number) => {

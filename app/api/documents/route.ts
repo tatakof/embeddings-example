@@ -11,25 +11,79 @@ const COLLECTION_NAME = "documents"
 
 // Surus AI embedding function
 async function getSurusEmbedding(text: string, dimension = 768): Promise<number[]> {
-  const response = await fetch(`${process.env.SURUS_API_URL}/embeddings`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.SURUS_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "nomic-ai/nomic-embed-text-v2-moe",
-      input: text,
-      dimensions: dimension, // Matryoshka embedding dimension
-    }),
-  })
+  try {
+    console.log("Calling Surus API with:", {
+      url: `${process.env.SURUS_API_URL}/v1/embeddings`,
+      hasApiKey: !!process.env.SURUS_API_KEY,
+      dimension,
+      textLength: text.length,
+    })
 
-  if (!response.ok) {
-    throw new Error(`Surus API error: ${response.statusText}`)
+    const res = await fetch(`${process.env.SURUS_API_URL}/v1/embeddings`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.SURUS_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "nomic-ai/nomic-embed-text-v2-moe",
+        input: [text],
+        dimensions: dimension,
+      }),
+    })
+
+    console.log("Surus API response status:", res.status)
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => res.statusText)
+      console.error("Surus API error response:", err)
+      throw new Error(`Surus API ${res.status}: ${err}`)
+    }
+
+    const data = await res.json()
+    console.log("Surus API success, embedding length:", data.data?.[0]?.embedding?.length)
+    return data.data[0].embedding
+  } catch (err) {
+    console.error("Surus embedding error:", err)
+    throw new Error(`Surus embedding failed: ${err instanceof Error ? err.message : "Unknown error"}`)
   }
+}
 
-  const data = await response.json()
-  return data.data[0].embedding
+// OpenAI embedding function
+async function getOpenAIEmbedding(text: string): Promise<number[]> {
+  try {
+    console.log("Calling OpenAI API with:", {
+      hasApiKey: !!process.env.OPENAI_API_KEY,
+      textLength: text.length,
+    })
+
+    const response = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-large",
+        input: text,
+      }),
+    })
+
+    console.log("OpenAI API response status:", response.status)
+
+    if (!response.ok) {
+      const err = await response.text().catch(() => response.statusText)
+      console.error("OpenAI API error response:", err)
+      throw new Error(`OpenAI API ${response.status}: ${err}`)
+    }
+
+    const data = await response.json()
+    console.log("OpenAI API success, embedding length:", data.data?.[0]?.embedding?.length)
+    return data[0].embedding
+  } catch (err) {
+    console.error("OpenAI embedding error:", err)
+    throw new Error(`OpenAI embedding failed: ${err instanceof Error ? err.message : "Unknown error"}`)
+  }
 }
 
 // Calculate storage costs
@@ -53,8 +107,11 @@ function calculateStorageCosts(vectorCount: number, dimension: number) {
 // Ensure collection exists
 async function ensureCollection(dimension: number) {
   try {
+    console.log("Checking if collection exists...")
     await qdrant.getCollection(COLLECTION_NAME)
+    console.log("Collection exists")
   } catch (error) {
+    console.log("Collection doesn't exist, creating it with dimension:", dimension)
     // Collection doesn't exist, create it
     await qdrant.createCollection(COLLECTION_NAME, {
       vectors: {
@@ -62,6 +119,7 @@ async function ensureCollection(dimension: number) {
         distance: "Cosine",
       },
     })
+    console.log("Collection created successfully")
   }
 }
 
@@ -93,24 +151,55 @@ function chunkText(text: string, chunkSize = 500, overlap = 50): string[] {
 
 export async function POST(request: NextRequest) {
   try {
-    const { content, dimension = 768 } = await request.json()
+    console.log("=== Document indexing request started ===")
+
+    const body = await request.json()
+    const { content, dimension = 768, provider = "surus" } = body
+
+    console.log("Request params:", {
+      contentLength: content?.length,
+      dimension,
+      provider,
+      hasContent: !!content,
+    })
 
     if (!content || typeof content !== "string") {
       return NextResponse.json({ error: "Content is required" }, { status: 400 })
     }
 
+    // Check environment variables
+    console.log("Environment check:", {
+      hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+      hasSurusKey: !!process.env.SURUS_API_KEY,
+      surusUrl: process.env.SURUS_API_URL,
+      qdrantUrl: process.env.QDRANT_URL,
+    })
+
+    // Set dimension based on provider
+    const actualDimension = provider === "openai" ? 1536 : dimension
+    console.log("Using dimension:", actualDimension)
+
     // Ensure collection exists with correct dimension
-    await ensureCollection(dimension)
+    await ensureCollection(actualDimension)
 
     // Chunk the document
     const chunks = chunkText(content)
+    console.log("Text chunked into", chunks.length, "pieces")
 
-    // Generate embeddings for each chunk using Surus AI
+    // Generate embeddings for each chunk using selected provider
+    console.log(`Generating embeddings using ${provider}...`)
     const embeddings = await Promise.all(
-      chunks.map(async (chunk) => {
-        return await getSurusEmbedding(chunk, dimension)
+      chunks.map(async (chunk, index) => {
+        console.log(`Processing chunk ${index + 1}/${chunks.length}`)
+        if (provider === "openai") {
+          return await getOpenAIEmbedding(chunk)
+        } else {
+          return await getSurusEmbedding(chunk, actualDimension)
+        }
       }),
     )
+
+    console.log("All embeddings generated successfully")
 
     // Store chunks and embeddings in Qdrant
     const points = chunks.map((chunk, index) => ({
@@ -119,10 +208,12 @@ export async function POST(request: NextRequest) {
       payload: {
         text: chunk,
         timestamp: new Date().toISOString(),
-        dimension: dimension,
+        dimension: actualDimension,
+        provider: provider,
       },
     }))
 
+    console.log("Storing", points.length, "points in Qdrant...")
     await qdrant.upsert(COLLECTION_NAME, {
       wait: true,
       points,
@@ -131,16 +222,28 @@ export async function POST(request: NextRequest) {
     // Get current vector count for cost calculation
     const collectionInfo = await qdrant.getCollection(COLLECTION_NAME)
     const vectorCount = collectionInfo.points_count || chunks.length
-    const costMetrics = calculateStorageCosts(vectorCount, dimension)
+    const costMetrics = calculateStorageCosts(vectorCount, actualDimension)
+
+    console.log("=== Document indexing completed successfully ===")
 
     return NextResponse.json({
       message: "Document indexed successfully",
       chunks: chunks.length,
-      dimension: dimension,
+      dimension: actualDimension,
+      provider: provider,
       costMetrics,
     })
   } catch (error) {
-    console.error("Error indexing document:", error)
-    return NextResponse.json({ error: "Failed to index document" }, { status: 500 })
+    console.error("=== Document indexing failed ===")
+    console.error("Error details:", error)
+    console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace")
+
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "Failed to index document",
+        details: error instanceof Error ? error.stack : undefined,
+      },
+      { status: 500 },
+    )
   }
 }
