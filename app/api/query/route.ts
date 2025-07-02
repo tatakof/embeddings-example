@@ -124,13 +124,14 @@ Answer:`
 export async function POST(request: NextRequest) {
   try {
     console.log("=== Query request started ===")
-    const { query } = await request.json()
+    const { query, similarityThreshold = 0.1 } = await request.json()
 
     if (!query || typeof query !== "string") {
       return NextResponse.json({ error: "Query is required" }, { status: 400 })
     }
 
     console.log("Query text:", query)
+    console.log("Similarity threshold:", similarityThreshold)
 
     // Get all available collections
     const allCollections = await qdrant.getCollections()
@@ -141,7 +142,10 @@ export async function POST(request: NextRequest) {
     if (documentCollections.length === 0) {
       return NextResponse.json({
         response: "No document collections found. Please add some documents first.",
-        sources: 0,
+        sources: {
+          count: 0,
+          chunks: []
+        },
       })
     }
 
@@ -167,12 +171,21 @@ export async function POST(request: NextRequest) {
           ? await getOpenAIEmbedding(query)
           : await getSurusEmbedding(query, dimension)
         
-        // Search this collection
+        // Search this collection (no threshold to see all results)
         const searchResult = await qdrant.search(collection.name, {
           vector: embedding,
-          limit: 3,
-          score_threshold: 0.7,
+          limit: 5,
+          // Removed score_threshold to see all available results
         })
+        
+        console.log(`Search results for ${collection.name}:`, searchResult.length, "matches")
+        if (searchResult.length > 0) {
+          console.log("All scores:", searchResult.map(r => ({ score: r.score, text: (r.payload?.text as string)?.substring(0, 50) + "..." })))
+        } else {
+          console.log("No results found - checking collection info...")
+          const collectionInfo = await qdrant.getCollection(collection.name)
+          console.log("Collection points count:", collectionInfo.points_count)
+        }
         
         // Add metadata to results
         const resultsWithMetadata = searchResult.map(result => ({
@@ -195,7 +208,14 @@ export async function POST(request: NextRequest) {
 
     // Sort all results by score (highest first) and take top 5
     allResults.sort((a, b) => (b.score || 0) - (a.score || 0))
-    const topResults = allResults.slice(0, 5)
+    
+    // Apply user-defined threshold after seeing all scores
+    const filteredResults = allResults.filter(result => (result.score || 0) > similarityThreshold)
+    const topResults = filteredResults.slice(0, 5)
+    
+    console.log("All results before filtering:", allResults.length)
+    console.log(`Results after ${similarityThreshold} threshold:`, filteredResults.length)
+    console.log("Final top results:", topResults.length)
 
     console.log("Combined search results:", topResults.length, "matches from", documentCollections.length, "collections")
 
@@ -207,7 +227,10 @@ export async function POST(request: NextRequest) {
         response: "I couldn't find any relevant information in the knowledge base to answer your question.",
         collectionsSearched: documentCollections.length,
         collectionsFound: documentCollections.map(c => c.name),
-        sources: 0,
+        sources: {
+          count: 0,
+          chunks: []
+        },
       })
     }
 
@@ -219,7 +242,17 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       response: text,
-      sources: relevantChunks.length,
+      sources: {
+        count: relevantChunks.length,
+        chunks: topResults.map((result, index) => ({
+          text: result.payload?.text || "",
+          score: Math.round((result.score || 0) * 100) / 100, // Round to 2 decimal places
+          collection: result.collection,
+          provider: result.provider,
+          dimension: result.dimension,
+          rank: index + 1
+        }))
+      },
       collectionsSearched: documentCollections.length,
       collectionsFound: documentCollections.map(c => c.name),
       textModel: "Qwen/Qwen3-1.7B",

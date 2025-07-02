@@ -11,9 +11,26 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Loader2, Upload, MessageSquare, Trash2 } from "lucide-react"
 import { CostComparison } from "@/components/cost-comparison"
 
+interface SourceChunk {
+  text: string
+  score: number
+  collection: string
+  provider: string
+  dimension: number
+  rank: number
+}
+
 interface Message {
   role: "user" | "assistant"
   content: string
+  sources?: {
+    count: number
+    chunks: SourceChunk[]
+  }
+  metadata?: {
+    textModel?: string
+    collectionsSearched?: number
+  }
 }
 
 export default function RAGPipeline() {
@@ -26,6 +43,7 @@ export default function RAGPipeline() {
   const [isClearing, setIsClearing] = useState(false)
   const [embeddingDimension, setEmbeddingDimension] = useState(768)
   const [embeddingProvider, setEmbeddingProvider] = useState<"surus" | "openai">("surus")
+  const [similarityThreshold, setSimilarityThreshold] = useState(0.1)
   const [costMetrics, setCostMetrics] = useState<{
     totalVectors: number
     storageSize: string
@@ -82,11 +100,19 @@ export default function RAGPipeline() {
       const response = await fetch("/api/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, similarityThreshold }),
       })
 
       const data = await response.json()
-      const assistantMessage: Message = { role: "assistant", content: data.response }
+      const assistantMessage: Message = { 
+        role: "assistant", 
+        content: data.response,
+        sources: data.sources,
+        metadata: {
+          textModel: data.textModel,
+          collectionsSearched: data.collectionsSearched
+        }
+      }
       setMessages((prev) => [...prev, assistantMessage])
     } catch (error) {
       console.error("Error querying:", error)
@@ -291,12 +317,45 @@ export default function RAGPipeline() {
                   <div className="space-y-4">
                     {messages.map((message, index) => (
                       <div key={index} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-                        <div
-                          className={`max-w-[80%] p-3 rounded-lg ${
-                            message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
-                          }`}
-                        >
-                          <p className="text-sm">{message.content}</p>
+                        <div className={`max-w-[85%] ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                          <div
+                            className={`p-3 rounded-lg ${
+                              message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
+                            }`}
+                          >
+                            <p className="text-sm">{message.content}</p>
+                            {message.metadata && (
+                              <div className="mt-2 text-xs opacity-70">
+                                Model: {message.metadata.textModel} • Collections: {message.metadata.collectionsSearched}
+                              </div>
+                            )}
+                          </div>
+                          
+                          {/* Sources Section */}
+                          {message.sources && message.sources.chunks.length > 0 && (
+                            <div className="mt-3 space-y-2">
+                              <div className="text-xs font-medium text-muted-foreground">
+                                Sources ({message.sources.count} chunks found):
+                              </div>
+                              <div className="space-y-2">
+                                {message.sources.chunks.map((chunk, chunkIndex) => (
+                                  <div key={chunkIndex} className="bg-secondary/50 p-2 rounded border-l-2 border-blue-500">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                        <span className="font-medium">#{chunk.rank}</span>
+                                        <span>Score: {chunk.score}</span>
+                                        <span>{chunk.provider}</span>
+                                        <span>{chunk.dimension}D</span>
+                                      </div>
+                                    </div>
+                                    <p className="text-xs text-foreground/80 line-clamp-3">
+                                      {chunk.text}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -304,17 +363,42 @@ export default function RAGPipeline() {
                 )}
               </ScrollArea>
 
-              <form onSubmit={handleQuery} className="flex gap-2">
-                <Input
-                  placeholder="Ask a question about your documents..."
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  disabled={isQuerying}
-                />
-                <Button type="submit" disabled={isQuerying || !query.trim()}>
-                  {isQuerying ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ask"}
-                </Button>
-              </form>
+              <div className="space-y-3">
+                <div className="flex items-center gap-4 p-3 bg-secondary/30 rounded-lg">
+                  <label htmlFor="similarity-threshold" className="text-sm font-medium whitespace-nowrap">
+                    Similarity Threshold:
+                  </label>
+                  <div className="flex-1 flex flex-col">
+                    <div className="text-xs text-muted-foreground mb-1">
+                      Lower = more results, Higher = more relevant
+                    </div>
+                    <input
+                      id="similarity-threshold"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={similarityThreshold}
+                      onChange={(e) => setSimilarityThreshold(Number(e.target.value))}
+                      className="h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+                  <span className="text-sm font-mono bg-background px-2 py-1 rounded border min-w-[4rem] text-center">
+                    {similarityThreshold.toFixed(2)}
+                  </span>
+                </div>
+                <form onSubmit={handleQuery} className="flex gap-2">
+                  <Input
+                    placeholder="Ask a question about your documents..."
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    disabled={isQuerying}
+                  />
+                  <Button type="submit" disabled={isQuerying || !query.trim()}>
+                    {isQuerying ? <Loader2 className="h-4 w-4 animate-spin" /> : "Ask"}
+                  </Button>
+                </form>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
