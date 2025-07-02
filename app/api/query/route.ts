@@ -1,6 +1,4 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { openai } from "@ai-sdk/openai"
-import { generateText } from "ai"
 import { QdrantClient } from "@qdrant/js-client-rest"
 
 // Initialize Qdrant client
@@ -71,6 +69,54 @@ async function getOpenAIEmbedding(text: string): Promise<number[]> {
     return data[0].embedding
   } catch (err) {
     console.error("OpenAI embedding error:", err)
+    throw err
+  }
+}
+
+// Surus AI text generation function
+async function generateSurusResponse(context: string, query: string): Promise<string> {
+  try {
+    console.log("Query: Calling Surus Chat Completions API...")
+    const response = await fetch('https://api.surus.dev/functions/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.SURUS_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'Qwen/Qwen3-1.7B',
+        messages: [
+          {
+            role: 'system',
+            content: `Sos un asistente útil basado en múltiples modelos de embeddings.
+Respondé preguntas usando solo el contexto de documentos procesados con
+diferentes proveedores de embeddings (OpenAI y Surus AI, con varias dimensiones).
+Si el contexto no tiene suficiente info para responder, decilo.
+Sé breve y preciso en tus respuestas.`
+          },
+          {
+            role: 'user',
+            content: `Context:
+${context}
+
+Question: ${query}
+
+Answer:`
+          }
+        ],
+        max_tokens: 500
+      })
+    })
+
+    if (!response.ok) {
+      const err = await response.text().catch(() => response.statusText)
+      throw new Error(`Surus Chat API ${response.status}: ${err}`)
+    }
+
+    const data = await response.json()
+    return data.choices[0].message.content
+  } catch (err) {
+    console.error("Surus text generation error:", err)
     throw err
   }
 }
@@ -165,24 +211,9 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Generate response using retrieved context
+    // Generate response using retrieved context with Surus
     const context = relevantChunks.join("\n\n")
-
-    const { text } = await generateText({
-      model: openai("gpt-4o"),
-      system: `You are a helpful assistant powered by multiple embedding models. 
-              Answer questions based on the provided context from documents embedded using 
-              various embedding providers (OpenAI and Surus AI with different dimensions).
-              Use only the information from the context to answer questions. 
-              If the context doesn't contain enough information to answer the question, say so.
-              Be concise and accurate in your responses.`,
-      prompt: `Context:
-${context}
-
-Question: ${query}
-
-Answer:`,
-    })
+    const text = await generateSurusResponse(context, query)
 
     console.log("=== Query completed successfully ===")
 
@@ -191,6 +222,7 @@ Answer:`,
       sources: relevantChunks.length,
       collectionsSearched: documentCollections.length,
       collectionsFound: documentCollections.map(c => c.name),
+      textModel: "Qwen/Qwen3-1.7B",
       ...searchMetadata,
     })
   } catch (error) {
