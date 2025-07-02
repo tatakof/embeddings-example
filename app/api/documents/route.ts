@@ -245,16 +245,22 @@ export async function POST(request: NextRequest) {
     console.log("All embeddings generated successfully")
 
     // Store chunks and embeddings in Qdrant
-    const points = chunks.map((chunk, index) => ({
-      id: Date.now() + index,
-      vector: embeddings[index],
-      payload: {
-        text: chunk,
-        timestamp: new Date().toISOString(),
-        dimension: actualDimension,
-        provider: provider,
-      },
-    }))
+    const baseTimestamp = Date.now()
+    const points = chunks.map((chunk, index) => {
+      // Generate a unique integer ID using timestamp and index
+      // Multiply by 1000 and add index to ensure uniqueness
+      const uniqueId = baseTimestamp * 1000 + index
+      return {
+        id: uniqueId,
+        vector: embeddings[index],
+        payload: {
+          text: chunk,
+          timestamp: new Date().toISOString(),
+          dimension: actualDimension,
+          provider: provider,
+        },
+      }
+    })
 
     console.log("Storing", points.length, "points in Qdrant...")
     await qdrant.upsert(getCollectionName(provider, actualDimension), {
