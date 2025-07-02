@@ -7,7 +7,10 @@ const qdrant = new QdrantClient({
   apiKey: process.env.QDRANT_API_KEY,
 })
 
-const COLLECTION_NAME = "documents"
+// Generate collection name based on provider and dimension
+function getCollectionName(provider: string, dimension: number): string {
+  return `documents_${provider}_${dimension}d`
+}
 
 // Surus AI embedding function
 async function getSurusEmbedding(text: string, dimension = 768): Promise<number[]> {
@@ -24,6 +27,8 @@ async function getSurusEmbedding(text: string, dimension = 768): Promise<number[
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${process.env.SURUS_API_KEY}`,
+        Accept: "application/json",
+        "Accept-Encoding": "identity",
       },
       body: JSON.stringify({
         model: "nomic-ai/nomic-embed-text-v2-moe",
@@ -77,8 +82,9 @@ async function getOpenAIEmbedding(text: string): Promise<number[]> {
       throw new Error(`OpenAI API ${response.status}: ${err}`)
     }
 
-    const data = await response.json()
-    console.log("OpenAI API success, embedding length:", data.data?.[0]?.embedding?.length)
+    // Parse JSON safely and extract the embedding vector
+    const { data } = (await response.json()) as { data: { embedding: number[] }[] }
+    console.log("OpenAI API success, embedding length:", data?.[0]?.embedding?.length)
     return data[0].embedding
   } catch (err) {
     console.error("OpenAI embedding error:", err)
@@ -87,7 +93,7 @@ async function getOpenAIEmbedding(text: string): Promise<number[]> {
 }
 
 // Calculate storage costs
-function calculateStorageCosts(vectorCount: number, dimension: number) {
+function calculateStorageCosts(vectorCount: number, dimension: number, baseline: number) {
   const bytesPerFloat = 4 // 32-bit float
   const bytesPerVector = dimension * bytesPerFloat
   const totalBytes = vectorCount * bytesPerVector
@@ -97,35 +103,64 @@ function calculateStorageCosts(vectorCount: number, dimension: number) {
   const costPerMBPerMonth = 0.001 // $0.001 per MB per month (example)
   const monthlyCost = totalMB * costPerMBPerMonth
 
+  // Calculate baseline cost for comparison (always OpenAI 1536D)
+  const baselineBytes = vectorCount * baseline * bytesPerFloat
+  const baselineMB = baselineBytes / (1024 * 1024)
+  const baselineCost = baselineMB * costPerMBPerMonth
+  const savingsPercent = baseline !== dimension ? ((baselineCost - monthlyCost) / baselineCost) * 100 : 0
+
   return {
     totalVectors: vectorCount,
     storageSize: totalMB > 1024 ? `${(totalMB / 1024).toFixed(2)} GB` : `${totalMB.toFixed(2)} MB`,
     monthlyCost: `$${monthlyCost.toFixed(4)}`,
+    savingsPercent: savingsPercent > 0 ? `${savingsPercent.toFixed(0)}% savings vs OpenAI 1536D` : null,
   }
 }
 
 // Ensure collection exists
-async function ensureCollection(dimension: number) {
+async function ensureCollection(provider: string, dimension: number) {
+  const collectionName = getCollectionName(provider, dimension)
   try {
     console.log("Checking if collection exists...")
-    await qdrant.getCollection(COLLECTION_NAME)
-    console.log("Collection exists")
+    const existingCollection = await qdrant.getCollection(collectionName)
+    const existingDimension = existingCollection.config?.params?.vectors?.size
+    
+    if (existingDimension && existingDimension !== dimension) {
+      console.log(`Collection exists with dimension ${existingDimension}, but need ${dimension}. Deleting and recreating...`)
+      await qdrant.deleteCollection(collectionName)
+      // Create new collection with correct dimension
+      await qdrant.createCollection(collectionName, {
+        vectors: {
+          size: dimension, // Dynamic dimension based on matryoshka representation learning
+          distance: "Cosine",
+        },
+      })
+      console.log("Collection recreated with correct dimension:", dimension)
+    } else {
+      console.log(`Collection ${collectionName} exists with correct dimension:`, existingDimension)
+    }
   } catch (error) {
-    console.log("Collection doesn't exist, creating it with dimension:", dimension)
+    console.log(`Collection ${collectionName} doesn't exist, creating it with dimension:`, dimension)
     // Collection doesn't exist, create it
-    await qdrant.createCollection(COLLECTION_NAME, {
+    await qdrant.createCollection(collectionName, {
       vectors: {
-        size: dimension, // Dynamic dimension based on matryoshka embedding
+        size: dimension, // Dynamic dimension based on matryoshka representation learning
         distance: "Cosine",
       },
     })
-    console.log("Collection created successfully")
+    console.log(`Collection ${collectionName} created successfully`)
   }
 }
 
 // Simple text chunking function
 function chunkText(text: string, chunkSize = 500, overlap = 50): string[] {
   const chunks: string[] = []
+  
+  // For very short texts or texts without sentence endings, treat as single chunk
+  if (text.trim().length <= 50 || !/[.!?]/.test(text)) {
+    return text.trim().length > 0 ? [text.trim()] : []
+  }
+  
   const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0)
 
   let currentChunk = ""
@@ -180,11 +215,19 @@ export async function POST(request: NextRequest) {
     console.log("Using dimension:", actualDimension)
 
     // Ensure collection exists with correct dimension
-    await ensureCollection(actualDimension)
+    await ensureCollection(provider, actualDimension)
 
     // Chunk the document
     const chunks = chunkText(content)
     console.log("Text chunked into", chunks.length, "pieces")
+
+    // Safety check: ensure we have chunks to process
+    if (chunks.length === 0) {
+      return NextResponse.json({ 
+        error: "Text could not be chunked. Please provide longer text or text with punctuation.",
+        suggestion: "Try adding a period at the end of your text or provide more content."
+      }, { status: 400 })
+    }
 
     // Generate embeddings for each chunk using selected provider
     console.log(`Generating embeddings using ${provider}...`)
@@ -214,15 +257,15 @@ export async function POST(request: NextRequest) {
     }))
 
     console.log("Storing", points.length, "points in Qdrant...")
-    await qdrant.upsert(COLLECTION_NAME, {
+    await qdrant.upsert(getCollectionName(provider, actualDimension), {
       wait: true,
       points,
     })
 
     // Get current vector count for cost calculation
-    const collectionInfo = await qdrant.getCollection(COLLECTION_NAME)
+    const collectionInfo = await qdrant.getCollection(getCollectionName(provider, actualDimension))
     const vectorCount = collectionInfo.points_count || chunks.length
-    const costMetrics = calculateStorageCosts(vectorCount, actualDimension)
+    const costMetrics = calculateStorageCosts(vectorCount, actualDimension, 1536)
 
     console.log("=== Document indexing completed successfully ===")
 

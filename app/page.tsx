@@ -29,6 +29,7 @@ export default function RAGPipeline() {
     totalVectors: number
     storageSize: string
     monthlyCost: string
+    savingsPercent?: string
   } | null>(null)
 
   // Reset dimension when provider changes
@@ -99,9 +100,9 @@ export default function RAGPipeline() {
   return (
     <div className="container mx-auto p-6 max-w-6xl">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">RAG Pipeline with Qdrant & OpenAI</h1>
+        <h1 className="text-3xl font-bold mb-2">RAG Pipeline with Qdrant, OpenAI & Surus</h1>
         <p className="text-muted-foreground">
-          Add documents to your knowledge base and query them using retrieval-augmented generation.
+          Add documents to your knowledge base using different embedding providers and dimensions. Query across all collections using retrieval-augmented generation.
         </p>
       </div>
 
@@ -174,6 +175,9 @@ export default function RAGPipeline() {
                 {costMetrics && (
                   <div className="text-sm text-muted-foreground">
                     Storage: {costMetrics.storageSize} | Est. monthly cost: {costMetrics.monthlyCost}
+                    {costMetrics.savingsPercent && (
+                      <span className="text-green-600 ml-2">• {costMetrics.savingsPercent}</span>
+                    )}
                   </div>
                 )}
               </div>

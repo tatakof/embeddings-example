@@ -9,7 +9,10 @@ const qdrant = new QdrantClient({
   apiKey: process.env.QDRANT_API_KEY,
 })
 
-const COLLECTION_NAME = "documents"
+// Generate collection name based on provider and dimension
+function getCollectionName(provider: string, dimension: number): string {
+  return `documents_${provider}_${dimension}d`
+}
 
 // Surus AI embedding function (same as in documents route)
 async function getSurusEmbedding(text: string, dimension = 768): Promise<number[]> {
@@ -19,7 +22,9 @@ async function getSurusEmbedding(text: string, dimension = 768): Promise<number[
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.SURUS_API_KEY}`,
+        "Authorization": `Bearer ${process.env.SURUS_API_KEY}`,
+        Accept: "application/json",
+        "Accept-Encoding": "identity",
       },
       body: JSON.stringify({
         model: "nomic-ai/nomic-embed-text-v2-moe",
@@ -81,38 +86,81 @@ export async function POST(request: NextRequest) {
 
     console.log("Query text:", query)
 
-    // Get collection info to determine dimension
-    const collectionInfo = await qdrant.getCollection(COLLECTION_NAME)
-    const dimension = collectionInfo.config?.params?.vectors?.size || 768
-    console.log("Collection dimension:", dimension)
+    // Get all available collections
+    const allCollections = await qdrant.getCollections()
+    const documentCollections = allCollections.collections.filter(c => 
+      c.name.startsWith('documents_')
+    )
 
-    // Determine provider based on dimension (simple heuristic)
-    const provider = dimension === 1536 ? "openai" : "surus"
-    console.log("Detected provider:", provider)
+    if (documentCollections.length === 0) {
+      return NextResponse.json({
+        response: "No document collections found. Please add some documents first.",
+        sources: 0,
+      })
+    }
 
-    // Generate embedding for the query using detected provider
-    const embedding =
-      provider === "openai" ? await getOpenAIEmbedding(query) : await getSurusEmbedding(query, dimension)
+    console.log("Found document collections:", documentCollections.map(c => c.name))
 
-    console.log("Generated embedding, length:", embedding.length)
+    // Search across all collections and combine results
+    let allResults: any[] = []
+    let searchMetadata: any = {}
 
-    // Search for similar documents in Qdrant
-    const searchResult = await qdrant.search(COLLECTION_NAME, {
-      vector: embedding,
-      limit: 5,
-      score_threshold: 0.7,
-    })
+    for (const collection of documentCollections) {
+      try {
+        // Parse collection name to determine provider and dimension
+        const nameMatch = collection.name.match(/documents_(\w+)_(\d+)d/)
+        if (!nameMatch) continue
+        
+        const [, provider, dimensionStr] = nameMatch
+        const dimension = parseInt(dimensionStr)
+        
+        console.log(`Searching in ${collection.name} (${provider}, ${dimension}D)`)
+        
+        // Generate embedding for this provider/dimension
+        const embedding = provider === "openai" 
+          ? await getOpenAIEmbedding(query)
+          : await getSurusEmbedding(query, dimension)
+        
+        // Search this collection
+        const searchResult = await qdrant.search(collection.name, {
+          vector: embedding,
+          limit: 3,
+          score_threshold: 0.7,
+        })
+        
+        // Add metadata to results
+        const resultsWithMetadata = searchResult.map(result => ({
+          ...result,
+          collection: collection.name,
+          provider,
+          dimension
+        }))
+        
+        allResults.push(...resultsWithMetadata)
+        
+        if (!searchMetadata.primaryProvider && searchResult.length > 0) {
+          searchMetadata = { provider, dimension, embeddingModel: provider === "openai" ? "text-embedding-3-large" : "nomic-ai/nomic-embed-text-v2-moe" }
+        }
+        
+      } catch (error) {
+        console.warn(`Failed to search collection ${collection.name}:`, error)
+      }
+    }
 
-    console.log("Search results:", searchResult.length, "matches")
+    // Sort all results by score (highest first) and take top 5
+    allResults.sort((a, b) => (b.score || 0) - (a.score || 0))
+    const topResults = allResults.slice(0, 5)
+
+    console.log("Combined search results:", topResults.length, "matches from", documentCollections.length, "collections")
 
     // Extract relevant text chunks
-    const relevantChunks = searchResult.map((result) => result.payload?.text).filter(Boolean)
+    const relevantChunks = topResults.map((result) => result.payload?.text).filter(Boolean)
 
     if (relevantChunks.length === 0) {
       return NextResponse.json({
         response: "I couldn't find any relevant information in the knowledge base to answer your question.",
-        dimension,
-        provider,
+        collectionsSearched: documentCollections.length,
+        collectionsFound: documentCollections.map(c => c.name),
         sources: 0,
       })
     }
@@ -122,12 +170,12 @@ export async function POST(request: NextRequest) {
 
     const { text } = await generateText({
       model: openai("gpt-4o"),
-      system: `You are a helpful assistant powered by ${provider === "openai" ? "OpenAI" : "Surus AI"} embedding models. 
-             Answer questions based on the provided context from documents embedded using 
-             ${provider === "openai" ? "OpenAI text-embedding-3-large" : `Surus matryoshka embeddings with ${dimension} dimensions`}.
-             Use only the information from the context to answer questions. 
-             If the context doesn't contain enough information to answer the question, say so.
-             Be concise and accurate in your responses.`,
+      system: `You are a helpful assistant powered by multiple embedding models. 
+              Answer questions based on the provided context from documents embedded using 
+              various embedding providers (OpenAI and Surus AI with different dimensions).
+              Use only the information from the context to answer questions. 
+              If the context doesn't contain enough information to answer the question, say so.
+              Be concise and accurate in your responses.`,
       prompt: `Context:
 ${context}
 
@@ -141,9 +189,9 @@ Answer:`,
     return NextResponse.json({
       response: text,
       sources: relevantChunks.length,
-      dimension,
-      provider,
-      embeddingModel: provider === "openai" ? "text-embedding-3-large" : "nomic-ai/nomic-embed-text-v2-moe",
+      collectionsSearched: documentCollections.length,
+      collectionsFound: documentCollections.map(c => c.name),
+      ...searchMetadata,
     })
   } catch (error) {
     console.error("=== Query failed ===")
