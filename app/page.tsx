@@ -48,6 +48,7 @@ export default function RAGPipeline() {
   const [embeddingDimension, setEmbeddingDimension] = useState(768)
   const [embeddingProvider, setEmbeddingProvider] = useState<"surus" | "openai">("surus")
   const [similarityThreshold, setSimilarityThreshold] = useState(0.2)
+  const [maxChunks, setMaxChunks] = useState(5)
   const [costMetrics, setCostMetrics] = useState<{
     totalVectors: number
     storageSize: string
@@ -140,7 +141,7 @@ export default function RAGPipeline() {
       const response = await fetch("/api/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, similarityThreshold }),
+        body: JSON.stringify({ query, similarityThreshold, maxChunks }),
       })
 
       const data = await response.json()
@@ -199,11 +200,11 @@ export default function RAGPipeline() {
     <div className="container mx-auto p-6 max-w-6xl">
       <div className="mb-8">
         <div className="flex items-center justify-center gap-6 mb-6">
-          <Image src="/logo_qdrant.png" alt="Qdrant" width={80} height={80} className="rounded-lg" />
           <Image src="/logo_surus.png" alt="Surus" width={80} height={80} className="rounded-lg" />
+          <Image src="/logo_qdrant.png" alt="Qdrant" width={80} height={80} className="rounded-lg" />
           <Image src="/vercel_logo.png" alt="Vercel" width={80} height={80} className="rounded-lg" />
         </div>
-        <h1 className="text-3xl font-bold mb-2">Pipeline RAG con Qdrant, Surus y Vercel</h1>
+        <h1 className="text-3xl font-bold mb-2">Pipeline RAG con Surus, Qdrant y Vercel</h1>
         <p className="text-muted-foreground">
           Agregá documentos a tu base de conocimiento usando diferentes proveedores de embeddings y dimensiones. Consultá todas las colecciones usando generación aumentada por recuperación.
         </p>
@@ -505,6 +506,22 @@ export default function RAGPipeline() {
                   <span className="text-sm font-mono bg-background px-2 py-1 rounded border min-w-[4rem] text-center">
                     {similarityThreshold.toFixed(2)}
                   </span>
+                </div>
+                {/* Max Chunks Control */}
+                <div className="flex items-center gap-4 p-3 bg-secondary/30 rounded-lg">
+                  <label htmlFor="max-chunks" className="text-sm font-medium whitespace-nowrap">
+                    Fragmentos en contexto:
+                  </label>
+                  <input
+                    id="max-chunks"
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={maxChunks}
+                    onChange={(e) => setMaxChunks(Number(e.target.value))}
+                    className="w-20 px-2 py-1 border rounded-md text-sm"
+                  />
+                  <span className="text-xs text-muted-foreground">Cuántos fragmentos relevantes se envían al modelo</span>
                 </div>
                 <form onSubmit={handleQuery} className="flex gap-2">
                   <Input

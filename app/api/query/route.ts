@@ -124,7 +124,7 @@ Answer:`
 export async function POST(request: NextRequest) {
   try {
     console.log("=== Query request started ===")
-    const { query, similarityThreshold = 0.1 } = await request.json()
+    const { query, similarityThreshold = 0.1, maxChunks = 5 } = await request.json()
 
     if (!query || typeof query !== "string") {
       return NextResponse.json({ error: "Se requiere una consulta" }, { status: 400 })
@@ -174,8 +174,7 @@ export async function POST(request: NextRequest) {
         // Search this collection (no threshold to see all results)
         const searchResult = await qdrant.search(collection.name, {
       vector: embedding,
-      limit: 5,
-          // Removed score_threshold to see all available results
+      limit: maxChunks,
         })
         
         console.log(`Search results for ${collection.name}:`, searchResult.length, "matches")
@@ -211,7 +210,7 @@ export async function POST(request: NextRequest) {
     
     // Apply user-defined threshold after seeing all scores
     const filteredResults = allResults.filter(result => (result.score || 0) > similarityThreshold)
-    const topResults = filteredResults.slice(0, 5)
+    const topResults = filteredResults.slice(0, maxChunks)
     
     console.log("All results before filtering:", allResults.length)
     console.log(`Results after ${similarityThreshold} threshold:`, filteredResults.length)
