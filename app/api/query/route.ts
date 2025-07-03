@@ -165,16 +165,16 @@ export async function POST(request: NextRequest) {
         const dimension = parseInt(dimensionStr)
         
         console.log(`Searching in ${collection.name} (${provider}, ${dimension}D)`)
-        
+
         // Generate embedding for this provider/dimension
         const embedding = provider === "openai" 
           ? await getOpenAIEmbedding(query)
           : await getSurusEmbedding(query, dimension)
-        
+
         // Search this collection (no threshold to see all results)
         const searchResult = await qdrant.search(collection.name, {
-          vector: embedding,
-          limit: 5,
+      vector: embedding,
+      limit: 5,
           // Removed score_threshold to see all available results
         })
         

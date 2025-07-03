@@ -37,6 +37,9 @@ interface Message {
 export default function RAGPipeline() {
   const [documents, setDocuments] = useState<string[]>([])
   const [newDocument, setNewDocument] = useState("")
+  const [inputFormat, setInputFormat] = useState<'text' | 'json' | 'array'>('text')
+  const [jsonInput, setJsonInput] = useState('')
+  const [arrayInput, setArrayInput] = useState('')
   const [isIndexing, setIsIndexing] = useState(false)
   const [isClearing, setIsClearing] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
@@ -44,7 +47,7 @@ export default function RAGPipeline() {
   const [isQuerying, setIsQuerying] = useState(false)
   const [embeddingDimension, setEmbeddingDimension] = useState(768)
   const [embeddingProvider, setEmbeddingProvider] = useState<"surus" | "openai">("surus")
-  const [similarityThreshold, setSimilarityThreshold] = useState(0.7)
+  const [similarityThreshold, setSimilarityThreshold] = useState(0.2)
   const [costMetrics, setCostMetrics] = useState<{
     totalVectors: number
     storageSize: string
@@ -62,7 +65,32 @@ export default function RAGPipeline() {
   }, [embeddingProvider])
 
   const addDocument = async () => {
-    if (!newDocument.trim()) return
+    let contentToSend: any = newDocument
+
+    // Process different input formats
+    if (inputFormat === 'json') {
+      try {
+        contentToSend = JSON.parse(jsonInput || '{}')
+      } catch (error) {
+        alert('JSON inválido. Verificá la sintaxis.')
+        return
+      }
+    } else if (inputFormat === 'array') {
+      try {
+        contentToSend = JSON.parse(arrayInput || '[]')
+        if (!Array.isArray(contentToSend)) {
+          throw new Error('Debe ser un array')
+        }
+      } catch (error) {
+        alert('Array inválido. Debe ser un array JSON válido.')
+        return
+      }
+    }
+
+    if (!contentToSend || (typeof contentToSend === 'string' && !contentToSend.trim())) {
+      alert('Proporcioná contenido para indexar')
+      return
+    }
 
     setIsIndexing(true)
     try {
@@ -70,17 +98,25 @@ export default function RAGPipeline() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: newDocument,
+          content: contentToSend,
           dimension: embeddingDimension,
           provider: embeddingProvider,
+          format: inputFormat
         }),
       })
 
       const data = await response.json()
       if (response.ok) {
-        setDocuments((prev) => [...prev, newDocument])
+        setDocuments((prev) => [...prev, typeof contentToSend === 'string' ? contentToSend : JSON.stringify(contentToSend)])
         setNewDocument("")
+        setJsonInput("")
+        setArrayInput("")
         setCostMetrics(data.costMetrics)
+        
+        // Show processing details
+        if (data.processingDetails) {
+          console.log('Processing details:', data.processingDetails)
+        }
       } else {
         alert(`Error: ${data.error}`)
       }
@@ -195,12 +231,79 @@ export default function RAGPipeline() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Textarea
-                placeholder="Pegá el contenido de tu documento acá..."
-                value={newDocument}
-                onChange={(e) => setNewDocument(e.target.value)}
-                rows={8}
-              />
+              {/* Format Selection */}
+              <div className="flex items-center gap-4">
+                <label className="text-sm font-medium">Formato de Entrada:</label>
+                <select
+                  value={inputFormat}
+                  onChange={(e) => setInputFormat(e.target.value as 'text' | 'json' | 'array')}
+                  className="px-3 py-1 border rounded-md text-sm"
+                >
+                  <option value="text">Texto Plano</option>
+                  <option value="json">JSON (Clave-Valor)</option>
+                  <option value="array">Array de Strings</option>
+                </select>
+              </div>
+
+              {/* Dynamic Input Fields */}
+              {inputFormat === 'text' && (
+                <Textarea
+                  placeholder="Pegá el contenido de tu documento acá... El texto se fragmentará automáticamente según el límite de tokens."
+                  value={newDocument}
+                  onChange={(e) => setNewDocument(e.target.value)}
+                  rows={8}
+                />
+              )}
+
+              {inputFormat === 'json' && (
+                <div className="space-y-2">
+                  <label className="text-sm text-muted-foreground">
+                    JSON con pares clave-valor. Cada valor será procesado como un documento separado:
+                  </label>
+                  <Textarea
+                    placeholder={`{
+  "introduccion": "Este es el primer capítulo...",
+  "desarrollo": "En esta sección discutimos...",
+  "conclusion": "Para finalizar, podemos decir..."
+}`}
+                    value={jsonInput}
+                    onChange={(e) => setJsonInput(e.target.value)}
+                    rows={8}
+                    className="font-mono text-sm"
+                  />
+                </div>
+              )}
+
+              {inputFormat === 'array' && (
+                <div className="space-y-2">
+                  <label className="text-sm text-muted-foreground">
+                    Array de strings. Cada elemento será procesado como un documento separado:
+                  </label>
+                  <Textarea
+                    placeholder={`[
+  "Primer documento o párrafo...",
+  "Segundo documento o párrafo...",
+  "Tercer documento o párrafo..."
+]`}
+                    value={arrayInput}
+                    onChange={(e) => setArrayInput(e.target.value)}
+                    rows={8}
+                    className="font-mono text-sm"
+                  />
+                </div>
+              )}
+
+              {/* Processing Info */}
+              <div className="bg-blue-50 p-3 rounded-lg text-sm">
+                <h4 className="font-medium mb-2">ℹ️ Información de Procesamiento:</h4>
+                <ul className="space-y-1 text-muted-foreground">
+                  <li>• <strong>Límite de tokens:</strong> {embeddingProvider === 'surus' ? '500 tokens (máx 512)' : '1000 tokens'} por fragmento</li>
+                  <li>• <strong>Texto largo:</strong> Se chunkea automáticamente con superposición para mejor contexto</li>
+                  <li>• <strong>JSON:</strong> Cada 'key' se convierte en metadatos, cada 'value' en documento</li>
+                  <li>• <strong>Array:</strong> Cada elemento se procesa como un documento independiente</li>
+                </ul>
+              </div>
+
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <label htmlFor="provider" className="text-sm font-medium">
@@ -249,7 +352,14 @@ export default function RAGPipeline() {
                 )}
               </div>
               <div className="flex gap-2">
-                <Button onClick={addDocument} disabled={isIndexing || !newDocument.trim()}>
+                <Button 
+                  onClick={addDocument} 
+                  disabled={isIndexing || (
+                    inputFormat === 'text' ? !newDocument.trim() :
+                    inputFormat === 'json' ? !jsonInput.trim() :
+                    !arrayInput.trim()
+                  )}
+                >
                   {isIndexing ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />

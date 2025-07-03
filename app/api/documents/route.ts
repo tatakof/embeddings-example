@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { QdrantClient } from "@qdrant/js-client-rest"
+// import { Agent } from "undici" // Removed to avoid TS resolution issues
 
 // Initialize Qdrant client
 const qdrant = new QdrantClient({
@@ -15,11 +16,16 @@ function getCollectionName(provider: string, dimension: number): string {
 // Surus AI embedding function
 async function getSurusEmbedding(text: string, dimension = 768): Promise<number[]> {
   try {
+    // Always trim to 512 token limit before sending to API
+    const trimmedText = trimToTokenLimit(text, 512)
+    
     console.log("Calling Surus API with:", {
       url: `${process.env.SURUS_API_URL}/v1/embeddings`,
       hasApiKey: !!process.env.SURUS_API_KEY,
       dimension,
-      textLength: text.length,
+      originalLength: text.length,
+      trimmedLength: trimmedText.length,
+      estimatedTokens: estimateTokens(trimmedText)
     })
 
     const res = await fetch(`${process.env.SURUS_API_URL}/v1/embeddings`, {
@@ -32,7 +38,7 @@ async function getSurusEmbedding(text: string, dimension = 768): Promise<number[
       },
       body: JSON.stringify({
         model: "nomic-ai/nomic-embed-text-v2-moe",
-        input: [text],
+        input: [trimmedText], // Use trimmed text
         dimensions: dimension,
       }),
     })
@@ -46,7 +52,23 @@ async function getSurusEmbedding(text: string, dimension = 768): Promise<number[
     }
 
     const data = await res.json()
-    console.log("Surus API success, embedding length:", data.data?.[0]?.embedding?.length)
+    console.log("Surus API response structure:", {
+      hasData: !!data.data,
+      dataLength: data.data?.length,
+      firstItemKeys: data.data?.[0] ? Object.keys(data.data[0]) : 'N/A',
+      embeddingLength: data.data?.[0]?.embedding?.length
+    })
+
+    // Better error handling for response structure
+    if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
+      throw new Error("Invalid response structure from Surus API")
+    }
+
+    if (!data.data[0].embedding || !Array.isArray(data.data[0].embedding)) {
+      throw new Error("Missing or invalid embedding in Surus API response")
+    }
+
+    console.log("Surus API success, embedding length:", data.data[0].embedding.length)
     return data.data[0].embedding
   } catch (err) {
     console.error("Surus embedding error:", err)
@@ -152,7 +174,144 @@ async function ensureCollection(provider: string, dimension: number) {
   }
 }
 
-// Simple text chunking function
+// Token counting function (rough approximation)
+function estimateTokens(text: string): number {
+  // Rough approximation: 1 token ≈ 4 characters for most languages
+  // This is conservative for Spanish/English text
+  return Math.ceil(text.length / 4)
+}
+
+// Trim text to fit within token limit
+function trimToTokenLimit(text: string, maxTokens = 512): string {
+  if (estimateTokens(text) <= maxTokens) {
+    return text
+  }
+  
+  // Rough approximation: trim to character count that should fit
+  const targetLength = maxTokens * 4 // 4 chars per token estimate
+  const trimmed = text.substring(0, targetLength)
+  
+  // Try to end at a word boundary
+  const lastSpaceIndex = trimmed.lastIndexOf(' ')
+  if (lastSpaceIndex > targetLength * 0.8) { // Only if we don't lose too much
+    return trimmed.substring(0, lastSpaceIndex).trim()
+  }
+  
+  return trimmed.trim()
+}
+
+// Enhanced text chunking with token awareness
+function chunkTextWithTokens(text: string, maxTokens = 500, overlapTokens = 50): string[] {
+  const chunks: string[] = []
+  
+  // For very short texts, return as single chunk if under token limit
+  if (estimateTokens(text.trim()) <= maxTokens) {
+    const trimmedText = trimToTokenLimit(text.trim())
+    return trimmedText.length > 0 ? [trimmedText] : []
+  }
+  
+  // Split into sentences first
+  const sentences = text.split(/[.!?]+/).filter((s) => s.trim().length > 0)
+  
+  let currentChunk = ""
+  
+  for (const sentence of sentences) {
+    const trimmedSentence = sentence.trim()
+    const potentialChunk = currentChunk + (currentChunk ? " " : "") + trimmedSentence
+    
+    if (estimateTokens(potentialChunk) > maxTokens && currentChunk.length > 0) {
+      // Trim to 512 token limit before adding to chunks
+      chunks.push(trimToTokenLimit(currentChunk.trim()))
+      
+      // Create overlap from previous chunk
+      const words = currentChunk.split(" ")
+      const overlapWords = Math.floor(overlapTokens / 4) // Rough word count for overlap
+      const overlap = words.slice(-overlapWords).join(" ")
+      currentChunk = overlap + " " + trimmedSentence
+    } else {
+      currentChunk = potentialChunk
+    }
+  }
+  
+  if (currentChunk.trim()) {
+    chunks.push(trimToTokenLimit(currentChunk.trim()))
+  }
+  
+  return chunks.filter((chunk) => estimateTokens(chunk) > 5) // Filter very short chunks
+}
+
+// Process different input formats
+interface ProcessedDocument {
+  text: string
+  metadata?: {
+    sourceKey?: string
+    format?: 'text' | 'json' | 'array'
+    originalIndex?: number
+    chunkIndex?: number
+    totalChunks?: number
+  }
+}
+
+function processInputContent(input: any, maxTokens = 500): ProcessedDocument[] {
+  const documents: ProcessedDocument[] = []
+  
+  if (typeof input === 'string') {
+    // Plain text input - chunk immediately if needed
+    const chunks = chunkTextWithTokens(input, maxTokens)
+    chunks.forEach((chunk, index) => {
+      documents.push({
+        text: chunk,
+        metadata: { 
+          format: 'text',
+          chunkIndex: index,
+          totalChunks: chunks.length
+        }
+      })
+    })
+  } else if (Array.isArray(input)) {
+    // Array of strings - chunk each item immediately
+    input.forEach((item, originalIndex) => {
+      if (typeof item === 'string' && item.trim()) {
+        const chunks = chunkTextWithTokens(item.trim(), maxTokens)
+        chunks.forEach((chunk, chunkIndex) => {
+          documents.push({
+            text: chunk,
+            metadata: { 
+              format: 'array',
+              originalIndex: originalIndex,
+              chunkIndex: chunkIndex,
+              totalChunks: chunks.length
+            }
+          })
+        })
+      }
+    })
+  } else if (typeof input === 'object' && input !== null) {
+    // JSON object with key-value pairs - chunk each value immediately
+    Object.entries(input).forEach(([key, value]) => {
+      if (typeof value === 'string' && value.trim()) {
+        const chunks = chunkTextWithTokens(value.trim(), maxTokens)
+        chunks.forEach((chunk, chunkIndex) => {
+          documents.push({
+            text: chunk,
+            metadata: { 
+              format: 'json',
+              sourceKey: key,
+              chunkIndex: chunkIndex,
+              totalChunks: chunks.length
+            }
+          })
+        })
+      }
+    })
+  }
+  
+  return documents
+}
+
+// No longer needed - chunking is done in processInputContent
+
+// Legacy function for backward compatibility
 function chunkText(text: string, chunkSize = 500, overlap = 50): string[] {
   const chunks: string[] = []
   
@@ -184,21 +343,115 @@ function chunkText(text: string, chunkSize = 500, overlap = 50): string[] {
   return chunks.filter((chunk) => chunk.length > 20) // Filter out very short chunks
 }
 
+// Simple sleep helper
+function sleep(ms: number) {
+  return new Promise((res) => setTimeout(res, ms))
+}
+
+// -------- Batching helpers for Surus -------- //
+const SURUS_BATCH_SIZE = 16 // Number of texts sent per request
+const SURUS_CONCURRENCY = 4 // Max parallel Surus requests
+const SURUS_MAX_RETRIES = 2 // Extra tries after first failure
+
+// Re-use a single keep-alive agent so we don't open a new socket per call
+// const surusAgent = new Agent({ keepAlive: true, keepAliveTimeout: 30_000 })
+
+async function getSurusEmbeddingsBatch(texts: string[], dimension = 768): Promise<number[][]> {
+  // Trim every text individually to 512 tokens
+  const trimmed = texts.map((t) => trimToTokenLimit(t, 512))
+
+  const res = await fetch(`${process.env.SURUS_API_URL}/v1/embeddings`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.SURUS_API_KEY}`,
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      model: "nomic-ai/nomic-embed-text-v2-moe",
+      input: trimmed,
+      dimensions: dimension,
+    }),
+    // Note: keep-alive Agent removed due to TS constraints; consider adding when type support available
+  })
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => res.statusText)
+    throw new Error(`Surus API ${res.status}: ${errText}`)
+  }
+
+  const data: any = await res.json()
+  if (!data?.data || !Array.isArray(data.data)) {
+    throw new Error("Invalid Surus response structure")
+  }
+
+  return data.data.map((d: any) => d.embedding as number[])
+}
+
+async function callWithRetry(fn: () => Promise<number[][]>): Promise<number[][]> {
+  let attempt = 0
+  while (true) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (attempt >= SURUS_MAX_RETRIES) throw err
+      const delay = 1000 * Math.pow(2, attempt) // 1s, 2s, ...
+      console.warn(`Surus batch failed (attempt ${attempt + 1}). Retrying in ${delay}ms`) // eslint-disable-line no-console
+      await sleep(delay)
+      attempt++
+    }
+  }
+}
+
+// Map chunks → embeddings using batching + concurrency limit
+async function embedWithSurusBatched(chunks: ProcessedDocument[], dimension: number): Promise<number[][]> {
+  const total = chunks.length
+  const result: number[][] = new Array(total)
+
+  // Build batches
+  const batchIndexes: Array<[number, number]> = [] // [start, end)
+  for (let i = 0; i < total; i += SURUS_BATCH_SIZE) {
+    batchIndexes.push([i, Math.min(i + SURUS_BATCH_SIZE, total)])
+  }
+
+  // Process batches with concurrency limit
+  let cursor = 0
+  async function worker() {
+    while (cursor < batchIndexes.length) {
+      const myIndex = cursor++
+      const [start, end] = batchIndexes[myIndex]
+      const slice = chunks.slice(start, end)
+      const embeddings = await callWithRetry(() => getSurusEmbeddingsBatch(slice.map((c) => c.text), dimension))
+      embeddings.forEach((vec, idx) => {
+        result[start + idx] = vec
+      })
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(SURUS_CONCURRENCY, batchIndexes.length) }, () => worker())
+  await Promise.all(workers)
+
+  return result
+}
+
 export async function POST(request: NextRequest) {
   try {
     console.log("=== Document indexing request started ===")
 
     const body = await request.json()
-    const { content, dimension = 768, provider = "surus" } = body
+    const { content, dimension = 768, provider = "surus", format = "auto" } = body
 
     console.log("Request params:", {
-      contentLength: content?.length,
+      contentType: typeof content,
+      contentLength: typeof content === 'string' ? content.length : 'N/A',
+      isArray: Array.isArray(content),
+      isObject: typeof content === 'object' && !Array.isArray(content),
       dimension,
       provider,
-      hasContent: !!content,
+      format
     })
 
-    if (!content || typeof content !== "string") {
+    if (!content) {
       return NextResponse.json({ error: "Se requiere contenido" }, { status: 400 })
     }
 
@@ -217,47 +470,47 @@ export async function POST(request: NextRequest) {
     // Ensure collection exists with correct dimension
     await ensureCollection(provider, actualDimension)
 
-    // Chunk the document
-    const chunks = chunkText(content)
-    console.log("Text chunked into", chunks.length, "pieces")
+    // Process input content based on format (chunking happens inside this function now)
+    const maxTokens = provider === "surus" ? 500 : 1000 // 500 tokens for Surus, trim at 512
+    const chunkedData = processInputContent(content, maxTokens)
+    console.log("Text processed and chunked into", chunkedData.length, "pieces")
 
-    // Safety check: ensure we have chunks to process
-    if (chunks.length === 0) {
+    if (chunkedData.length === 0) {
       return NextResponse.json({ 
-        error: "No se pudo fragmentar el texto. Proporcioná texto más largo o con puntuación.",
-        suggestion: "Probá agregando un punto al final del texto o proporcioná más contenido."
+        error: "No se pudo procesar el contenido. Verificá que el formato sea válido.",
+        suggestion: "Enviá texto plano, un array de strings, o un objeto JSON con pares clave-valor."
       }, { status: 400 })
     }
 
     // Generate embeddings for each chunk using selected provider
     console.log(`Generating embeddings using ${provider}...`)
-    const embeddings = await Promise.all(
-      chunks.map(async (chunk, index) => {
-        console.log(`Processing chunk ${index + 1}/${chunks.length}`)
-        if (provider === "openai") {
-          return await getOpenAIEmbedding(chunk)
-        } else {
-          return await getSurusEmbedding(chunk, actualDimension)
-        }
-      }),
-    )
+    let embeddings: number[][]
+    if (provider === "openai") {
+      embeddings = await Promise.all(chunkedData.map(async (chunkData) => await getOpenAIEmbedding(chunkData.text)))
+    } else {
+      embeddings = await embedWithSurusBatched(chunkedData, actualDimension)
+    }
 
     console.log("All embeddings generated successfully")
 
     // Store chunks and embeddings in Qdrant
     const baseTimestamp = Date.now()
-    const points = chunks.map((chunk, index) => {
+    const points = chunkedData.map((chunkData, index) => {
       // Generate a unique integer ID using timestamp and index
-      // Multiply by 1000 and add index to ensure uniqueness
       const uniqueId = baseTimestamp * 1000 + index
       return {
         id: uniqueId,
         vector: embeddings[index],
         payload: {
-          text: chunk,
+          text: chunkData.text,
           timestamp: new Date().toISOString(),
           dimension: actualDimension,
           provider: provider,
+          // Enhanced metadata
+          sourceFormat: chunkData.metadata?.format,
+          sourceKey: chunkData.metadata?.sourceKey,
+          originalIndex: chunkData.metadata?.originalIndex,
+          estimatedTokens: estimateTokens(chunkData.text)
         },
       }
     })
@@ -270,17 +523,22 @@ export async function POST(request: NextRequest) {
 
     // Get current vector count for cost calculation
     const collectionInfo = await qdrant.getCollection(getCollectionName(provider, actualDimension))
-    const vectorCount = collectionInfo.points_count || chunks.length
+    const vectorCount = collectionInfo.points_count || chunkedData.length
     const costMetrics = calculateStorageCosts(vectorCount, actualDimension, 1536)
 
     console.log("=== Document indexing completed successfully ===")
 
     return NextResponse.json({
       message: "Documento indexado exitosamente",
-      chunks: chunks.length,
+      chunks: chunkedData.length,
       dimension: actualDimension,
       provider: provider,
       costMetrics,
+      processingDetails: {
+        inputFormat: typeof content === 'string' ? 'text' : Array.isArray(content) ? 'array' : 'object',
+        maxTokensPerChunk: maxTokens,
+        averageTokensPerChunk: Math.round(chunkedData.reduce((sum: number, chunk: ProcessedDocument) => sum + estimateTokens(chunk.text), 0) / chunkedData.length)
+      }
     })
   } catch (error) {
     console.error("=== Document indexing failed ===")

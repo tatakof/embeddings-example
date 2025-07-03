@@ -10,10 +10,10 @@ interface CostComparisonProps {
 export function CostComparison({ vectorCount }: CostComparisonProps) {
   const dimensions = [
     { size: 1536, label: "OpenAI text-embedding-3-large", color: "destructive", provider: "openai" },
-    { size: 768, label: "Surus Standard", color: "default", provider: "surus" },
-    { size: 512, label: "Surus Balanced", color: "secondary", provider: "surus" },
-    { size: 256, label: "Surus Efficient", color: "outline", provider: "surus" },
-    { size: 128, label: "Surus Ultra-compact", color: "outline", provider: "surus" },
+    { size: 768, label: "Surus Estándar", color: "default", provider: "surus" },
+    { size: 512, label: "Surus Balanceado", color: "secondary", provider: "surus" },
+    { size: 256, label: "Surus Eficiente", color: "outline", provider: "surus" },
+    { size: 128, label: "Surus Ultra-compacto", color: "outline", provider: "surus" },
   ]
 
   const calculateCost = (dimension: number) => {
@@ -30,8 +30,8 @@ export function CostComparison({ vectorCount }: CostComparisonProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Storage Cost Comparison</CardTitle>
-        <CardDescription>Monthly storage costs for {vectorCount.toLocaleString()} vectors in Qdrant</CardDescription>
+        <CardTitle>Comparación de Costos de Almacenamiento</CardTitle>
+        <CardDescription>Costos mensuales de almacenamiento para {vectorCount.toLocaleString()} vectores en Qdrant</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="space-y-3">
@@ -50,8 +50,8 @@ export function CostComparison({ vectorCount }: CostComparisonProps) {
                   </span>
                 </div>
                 <div className="text-right">
-                  <div className="font-medium">${cost.toFixed(4)}/month</div>
-                  {savings > 0 && <div className="text-sm text-green-600">{savings.toFixed(0)}% savings</div>}
+                  <div className="font-medium">${cost.toFixed(4)}/mes</div>
+                  {savings > 0 && <div className="text-sm text-green-600">{savings.toFixed(0)}% de ahorro</div>}
                 </div>
               </div>
             )
@@ -59,8 +59,8 @@ export function CostComparison({ vectorCount }: CostComparisonProps) {
         </div>
         <div className="mt-4 p-3 bg-muted rounded-lg">
           <p className="text-sm text-muted-foreground">
-            💡 <strong>Matryoshka embeddings</strong> allow you to use smaller dimensions without retraining,
-            maintaining {">"}90% performance while reducing storage costs by up to 92%.
+            💡 <strong>Los embeddings Matryoshka</strong> te permiten usar dimensiones más chicas sin reentrenar,
+            manteniendo {">"}90% del rendimiento mientras reducís los costos de almacenamiento hasta un 92%.
           </p>
         </div>
       </CardContent>
