@@ -113,7 +113,7 @@ function calculateStorageCosts(vectorCount: number, dimension: number, baseline:
     totalVectors: vectorCount,
     storageSize: totalMB > 1024 ? `${(totalMB / 1024).toFixed(2)} GB` : `${totalMB.toFixed(2)} MB`,
     monthlyCost: `$${monthlyCost.toFixed(4)}`,
-    savingsPercent: savingsPercent > 0 ? `${savingsPercent.toFixed(0)}% savings vs OpenAI 1536D` : null,
+    savingsPercent: savingsPercent > 0 ? `${savingsPercent.toFixed(0)}% de ahorro vs OpenAI 1536D` : null,
   }
 }
 
@@ -199,7 +199,7 @@ export async function POST(request: NextRequest) {
     })
 
     if (!content || typeof content !== "string") {
-      return NextResponse.json({ error: "Content is required" }, { status: 400 })
+      return NextResponse.json({ error: "Se requiere contenido" }, { status: 400 })
     }
 
     // Check environment variables
@@ -224,8 +224,8 @@ export async function POST(request: NextRequest) {
     // Safety check: ensure we have chunks to process
     if (chunks.length === 0) {
       return NextResponse.json({ 
-        error: "Text could not be chunked. Please provide longer text or text with punctuation.",
-        suggestion: "Try adding a period at the end of your text or provide more content."
+        error: "No se pudo fragmentar el texto. Proporcioná texto más largo o con puntuación.",
+        suggestion: "Probá agregando un punto al final del texto o proporcioná más contenido."
       }, { status: 400 })
     }
 
@@ -276,7 +276,7 @@ export async function POST(request: NextRequest) {
     console.log("=== Document indexing completed successfully ===")
 
     return NextResponse.json({
-      message: "Document indexed successfully",
+      message: "Documento indexado exitosamente",
       chunks: chunks.length,
       dimension: actualDimension,
       provider: provider,
@@ -289,7 +289,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Failed to index document",
+        error: error instanceof Error ? error.message : "Falló al indexar el documento",
         details: error instanceof Error ? error.stack : undefined,
       },
       { status: 500 },

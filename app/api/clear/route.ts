@@ -34,7 +34,7 @@ export async function DELETE(request: NextRequest) {
     console.log("=== Knowledge base cleared successfully ===")
 
     return NextResponse.json({
-      message: "Knowledge base cleared successfully",
+      message: "Base de conocimiento limpiada exitosamente",
       deletedCollections: deletedCollections.length,
       collectionNames: deletedCollections,
     })
@@ -44,7 +44,7 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Failed to clear knowledge base",
+        error: error instanceof Error ? error.message : "Falló al limpiar la base de conocimiento",
         details: error instanceof Error ? error.stack : undefined,
       },
       { status: 500 },

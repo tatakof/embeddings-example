@@ -127,7 +127,7 @@ export async function POST(request: NextRequest) {
     const { query, similarityThreshold = 0.1 } = await request.json()
 
     if (!query || typeof query !== "string") {
-      return NextResponse.json({ error: "Query is required" }, { status: 400 })
+      return NextResponse.json({ error: "Se requiere una consulta" }, { status: 400 })
     }
 
     console.log("Query text:", query)
@@ -141,7 +141,7 @@ export async function POST(request: NextRequest) {
 
     if (documentCollections.length === 0) {
       return NextResponse.json({
-        response: "No document collections found. Please add some documents first.",
+        response: "No se encontraron colecciones de documentos. Agregá algunos documentos primero.",
         sources: {
           count: 0,
           chunks: []
@@ -224,7 +224,7 @@ export async function POST(request: NextRequest) {
 
     if (relevantChunks.length === 0) {
       return NextResponse.json({
-        response: "I couldn't find any relevant information in the knowledge base to answer your question.",
+        response: "No pude encontrar información relevante en la base de conocimiento para responder tu pregunta.",
         collectionsSearched: documentCollections.length,
         collectionsFound: documentCollections.map(c => c.name),
         sources: {
@@ -263,7 +263,7 @@ export async function POST(request: NextRequest) {
     console.error("Error processing query:", error)
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Failed to process query",
+        error: error instanceof Error ? error.message : "Falló al procesar la consulta",
         details: error instanceof Error ? error.stack : undefined,
       },
       { status: 500 },
