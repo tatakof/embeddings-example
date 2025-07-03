@@ -1,0 +1,14 @@
+{
+  "aws_na": {
+    "replication": 1,
+    "offload": false,
+    "quantization": "none",
+    "tiers": [
+      { "maxVectors": 1000000, "price": 9 },
+      { "maxVectors": 10000000, "price": 59 },
+      { "maxVectors": 50000000, "price": 199 },
+      { "maxVectors": 250000000, "price": 599 },
+      { "maxVectors": 1000000000, "price": 1999 }
+    ]
+  }
+} 

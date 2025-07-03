@@ -1,0 +1,8 @@
+{
+  "openai": {
+    "price_per_1m_tokens": 0.10
+  },
+  "surus": {
+    "price_per_1m_tokens": 0.02
+  }
+} 
