@@ -1,0 +1,122 @@
+---
+title: "Cost analysis"
+format:
+  html:
+    code-fold: false
+jupyter: python3
+---
+
+
+
+## Cost analysis 
+
+variables and constants: 
+
+constants
+- Cloud --> AWS
+- Region --> North America
+- Replication factor --> 1
+- Offloading vectors to disk --> False
+- Quantization --> None 
+- openai_dims = 1536
+- Chunk overlap --> 0
+- openai_text_embedding_3_small --> $0.02 per 1M tokens
+- openai_text_embedding_3_large --> $0.13 per 1M tokens
+- openai_text_embedding_ada_002 --> $0.10 per 1M tokens
+- surus_text_embedding --> $0.01 per 1M tokens
+
+variables: 
+- chunk_sizes = np.array([512, 128])
+- token_amounts = np.array([50000000, 500000000, 5000000000, 50000000000])
+- surus_dims = np.array([512, 128])
+
+
+
+Notes: 
+- given we are setting a chunk size smaller than both openai and surus embeddings' context length, we ignore this context length. 
+
+```{python}
+import numpy as np
+surus_dims = np.array([512, 128])
+openai_dims = 1536
+chunk_sizes = np.array([512, 128])
+token_amounts = np.array([50000000, 500000000, 5000000000, 50000000000])
+np.set_printoptions(suppress=True, formatter={'float': '{:0.2f}'.format})
+
+n_vectors_512chunk = np.ceil(token_amounts / chunk_sizes[0])
+n_vectors_128chunk = np.ceil(token_amounts / chunk_sizes[1])
+
+print(n_vectors_512chunk)
+# [97657.00 976563.00 9765625.00 97656250.00]
+
+print(n_vectors_128chunk)
+# [390625.00 3906250.00 39062500.00 390625000.00]
+```
+
+
+## Qdrant storage monthly costs for storing vectors coming from OPENAI and SURUS embedding models 
+```{python}
+
+# pricing per month for storing vectors in qdrant coming from OPENAI embedding models
+# taken from qdrant pricing calculator
+openai_pricing_512chunk_1536dim = np.array([32.54, 122.80, 982.40, 10478.96])
+
+# taken from qdrant pricing calculator
+openai_pricing_128chunk_1536dim = np.array([40.93, 409.33, 3929.61, 39296.10])
+
+
+
+# pricing per month for storing vectors in qdrant coming from SURUS embedding models
+# SURUS 512 dim
+# taken from qdrant pricing calculator 
+surus_pricing_512chunk_512dim = np.array([32.54, 40.93, 327.47, 3274.68])
+# taken from qdrant pricing calculator 
+surus_pricing_128chunk_512dim = np.array([32.54, 122.80, 1309.87, 13098.70])
+
+
+
+# SURUS 128 dim 
+# taken from qdrant pricing calculator 
+surus_pricing_512chunk_128dim = np.array([32.54, 32.54, 81.87, 818.70])
+# taken from qdrant pricing calculator 
+surus_pricing_128chunk_128dim = np.array([32.54, 40.93, 327.47, 3274.68])
+
+```
+
+
+
+## Cost to migrate your whole knowledge base from openai to surus. 
+
+```{python}
+
+token_amounts = np.array([50000000, 500000000, 5000000000, 50000000000])
+
+surus_text_embedding_price_per_1M_tokens = 0.01
+
+# cost to migrate your whole knowledge base from openai to surus
+cost_to_migrate_knowledge_base_to_surus = token_amounts / 1e6 * surus_text_embedding_price_per_1M_tokens
+
+print(f"usd: {cost_to_migrate_knowledge_base_to_surus}")
+
+
+
+
+
+
+
+```
+
+
+## ROI for migrating to surus and storing vectors in qdrant. 
+```{python}
+
+# using 512 token chunks
+monthly_roi_on_migrating_to_surus_512chunk = (openai_pricing_512chunk_1536dim - surus_pricing_512chunk_512dim) - cost_to_migrate_knowledge_base_to_surus
+print(f"monthly ROI on migrating to surus 512 chunk (USD): {monthly_roi_on_migrating_to_surus_512chunk}")
+
+# using 128 token chunks
+monthly_roi_on_migrating_to_surus_128chunk = (openai_pricing_128chunk_1536dim - surus_pricing_128chunk_512dim) - cost_to_migrate_knowledge_base_to_surus
+print(f"monthly ROI on migrating to surus 128 chunk (USD): {monthly_roi_on_migrating_to_surus_128chunk}")
+
+
+```
