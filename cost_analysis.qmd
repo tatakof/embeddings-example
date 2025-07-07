@@ -118,5 +118,4 @@ print(f"monthly ROI on migrating to surus 512 chunk (USD): {monthly_roi_on_migra
 monthly_roi_on_migrating_to_surus_128chunk = (openai_pricing_128chunk_1536dim - surus_pricing_128chunk_512dim) - cost_to_migrate_knowledge_base_to_surus
 print(f"monthly ROI on migrating to surus 128 chunk (USD): {monthly_roi_on_migrating_to_surus_128chunk}")
 
-
 ```
